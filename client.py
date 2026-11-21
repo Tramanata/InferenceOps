@@ -2,18 +2,31 @@ import supervision as sv
 from inference_sdk import InferenceHTTPClient, InferenceConfiguration
 from dotenv import load_dotenv
 import os
+import time
+from PIL import Image
+
+
 
 load_dotenv()
 
 api_key = os.getenv("ROBOFLOW_API_KEY")
 
-image = sv.load_image_from_url("https://media.roboflow.com/inference/people-walking.jpg")
+image = Image.open("people-walking.jpg")
+image.load()
 
 client = InferenceHTTPClient(
     api_url="http://localhost:9001",
     api_key=api_key,
 ).configure(InferenceConfiguration(api_key_transport="header"))
-results = client.infer(image, model_id="rfdetr-nano")
+
+list_latencies = []
+for i in range(20):
+    start = time.perf_counter()
+    results = client.infer(image, model_id="rfdetr-nano")
+    end = time.perf_counter()
+    request_latency = (end - start) * 1000  # Convert to milliseconds
+    list_latencies.append(request_latency)
+    print(f"Request latency: {request_latency:.2f} ms")
 
 detections = sv.Detections.from_inference(results)
 
