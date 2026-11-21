@@ -7,7 +7,7 @@ services:
 
     read_only: true
     ports:
-      - "127.0.0.1:9001:9001"
+      - "127.0.0.1:9002"
 
     volumes:
       - "${HOME}/.inference/cache:/tmp:rw"
