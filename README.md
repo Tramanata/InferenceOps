@@ -1,91 +1,132 @@
 # InferenceOps
 
-A local learning project for deploying, measuring, and improving a machine learning inference service. The current checkpoint is a working CPU inference server and a Python client that displays object-detection results.
+A local learning project for deploying, measuring, and improving a CPU machine learning inference service. Roboflow provides the inference server and pretrained model; this repository contains the deployment configuration, client, and measurement workflow.
 
-## What works today
+## Current progress
 
-- Roboflow Inference Server runs locally in a Docker container managed by Docker Compose.
-- A Python client sends an image to the server using the Inference SDK.
-- The server runs a pretrained RF-DETR object detector and returns predictions.
-- Supervision draws bounding boxes and labels on the original image and displays it.
-- Client dependencies are recorded with exact versions in `requirements.txt`.
+- **Compose:** the inference server runs locally and has returned predictions successfully.
+- **Client:** Python 3.12, the Inference SDK, and RF-DETR Nano process a fixed local image. Supervision displays bounding boxes and labels.
+- **Timing:** the client measures 20 sequential requests and reports average, median, minimum, and maximum latency.
+- **Kubernetes:** a single-node kind cluster runs the inference-server Deployment. The Pod started without restarts, and its web page was reached through port forwarding.
+- **Still to verify:** an actual prediction through Kubernetes. The client currently targets the Compose server on port 9001.
 
-A successful request and visualization have been verified manually. Latency, throughput, and memory benchmarks have not been recorded yet.
-
-## How the pieces fit together
+## Architecture
 
 ```text
-Docker Compose -> starts Roboflow Inference Server in a CPU container
+Python client in .venv
+  -> loads people-walking.jpg and its pixels before timing
+  -> sends image + rfdetr-nano model ID through the Inference SDK
+  -> receives object classes, confidence scores, and box coordinates
+  -> Supervision annotates the final response and displays the image
 
-Python client -> downloads the public test image
-              -> sends image + model ID to localhost:9001
-              <- receives predictions from the server
-              -> Supervision draws boxes and labels and displays the image
+Server targets:
+  Compose:     localhost:9001 -> inference-server container
+  Kubernetes:  localhost:9002 -> kubectl port-forward -> Pod port 9001
+
+Local Kubernetes environment:
+  Linux PC -> Docker -> kind node container -> containerd -> inference Pod
 ```
 
-Inference means using a trained model to make predictions. The inference server is the application that accepts requests, loads the selected model, prepares inputs, runs the model, and returns results. The model determines object classes, confidence scores, and bounding-box coordinates; Supervision visualizes those predictions.
+Inference means using a trained model to make predictions. The server accepts requests, loads the selected model, prepares inputs, runs inference, and returns predictions. Supervision renders the results; it does not perform the detection.
 
-Model execution happens locally inside the container. The current workflow still needs internet access for the public image and for model-resource access when required. An API key does not mean inference is running in Roboflow's cloud.
+Model execution happens locally inside the server container. Model resources may still require network access and Roboflow authentication. The client reads `ROBOFLOW_API_KEY` from a private project-root `.env` file and sends it using header transport. No custom model training has been performed.
 
-## Repository files
+## Repository
 
 | File | Purpose |
 | --- | --- |
-| `compose.yaml` | Defines the inference server's image, container settings, port mapping, cache, and privilege restrictions. |
-| `client.py` | Loads configuration, retrieves the image, requests predictions, and visualizes the response. |
-| `requirements.txt` | Records the Python packages installed for the client, including transitive dependencies. |
-| `.gitignore` | Excludes the private `.env` file. The local `.venv/` directory should also be excluded before committing. |
+| `compose.yaml` | Local CPU inference service, port mapping, persistent cache, and security settings. |
+| `k8s/deployment.yaml` | One inference-server replica with matching labels and an `emptyDir` cache mounted at `/tmp`. |
+| `client.py` | Loads the local image, makes 20 timed Nano requests, prints statistics, and visualizes the final response. |
+| `people-walking.jpg` | Fixed local test image. |
+| `requirements.txt` | Exact installed client package versions, including transitive dependencies. |
+| `.env` | Local API key configuration; excluded from Git. |
+| `.venv/` | Local Python 3.12 environment; should be excluded from Git. |
 
-## Server configuration
+## Setup and operation
 
-The service uses Roboflow's prebuilt CPU image. Compose uses that image to create a container; it does not build a custom inference server image from this repository.
+### Client environment
 
-- Port 9001 is published on `127.0.0.1`, allowing the client on this PC to reach the server.
-- The host directory `${HOME}/.inference/cache` is mounted read-write at `/tmp`, preserving cached model resources across container replacement.
-- The container root filesystem is read-only.
-- Linux capabilities are dropped, with `NET_BIND_SERVICE` added back, and `no-new-privileges` is enabled.
+Install Docker with the Compose plugin and [uv](https://docs.astral.sh/uv/getting-started/installation/). From the repository root:
 
-The image currently uses the mutable `latest` tag. A fixed version or digest is needed before making reproducible benchmark comparisons. The file also retains an obsolete top-level `version` field, which modern Compose ignores with a warning.
+1. Create `.venv` using Python 3.12 and activate it. Python 3.14 was rejected by the SDK during setup; uv supplies a separate compatible interpreter.
+2. Install the packages in `requirements.txt` into that environment.
+3. Create `.env` beside `client.py` with a valid `ROBOFLOW_API_KEY`. Never commit the real key.
+4. Keep `people-walking.jpg` in the repository root. Run the client from that directory because its image path is relative to the working directory.
 
-## Client environment and model
+The Python environment runs the client; Docker supplies the separate server environment. Displaying the annotated image requires a graphical session.
 
-The client uses a Python 3.12 virtual environment named `.venv`. This keeps its packages separate from Ubuntu's system Python. The SDK installation rejected the machine's Python 3.14 environment, so uv was used to create a compatible Python 3.12 environment.
+### Compose server
 
-The client uses:
+Start the service with Docker Compose using `compose.yaml`, then verify the page at [localhost:9001](http://localhost:9001). A manually created container with the same name or port must be stopped and removed before Compose can create its replacement.
 
-- **Inference SDK** to communicate with the local server over HTTP.
-- **python-dotenv** to load the project-root `.env` file.
-- **Supervision** to retrieve the test image, convert predictions, and render annotations.
+The Compose configuration:
 
-The selected model for this project is **RF-DETR Nano** (`rfdetr-nano`). Configure the client's model ID to use this alias for the baseline. No custom model training has been performed for this project.
+- Publishes port 9001 on `127.0.0.1` for local access.
+- Mounts `${HOME}/.inference/cache` read-write at `/tmp`, preserving cache files across container replacement.
+- Uses a read-only root filesystem, prevents privilege escalation through `no-new-privileges`, drops Linux capabilities, and adds back `NET_BIND_SERVICE`.
 
-## Recreating the current setup
+The file still includes an obsolete top-level `version` field. Modern Compose ignores it with a warning; it can be removed.
 
-1. Install Docker with the Compose plugin and install uv.
-2. Create and activate a Python 3.12 virtual environment in `.venv`.
-3. Install the dependencies listed in `requirements.txt` into that environment.
-4. Create a private `.env` file beside `client.py`, containing a valid `ROBOFLOW_API_KEY`. The client reads this value and supplies it to the SDK using header transport. Do not commit the key.
-5. Start the inference service using the repository's Compose configuration. If an older manually created container uses the same name or port, stop and remove that container first, preserving the cache directory.
-6. Confirm the server page responds at [localhost:9001](http://localhost:9001).
-7. Run `client.py` using the activated environment. The current client downloads the public walking-people image, requests predictions, and opens a visualization. Displaying the image requires a graphical session.
+### Kubernetes server
 
-The `.env` file and `.venv` directory serve different purposes: one stores private configuration, while the other contains the client interpreter and installed packages. Neither belongs in Git.
+Install [kind](https://kind.sigs.k8s.io/docs/user/quick-start/) and [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/). The completed deployment sequence was:
 
-## Next checkpoint: a repeatable baseline
+1. Create the cluster with `kind create cluster --name inferenceops --wait 120s`.
+2. Confirm the node is Ready using `kubectl --context kind-inferenceops get nodes`.
+3. Validate the manifest using `kubectl --context kind-inferenceops apply --dry-run=server -f k8s/deployment.yaml`.
+4. Apply it using `kubectl --context kind-inferenceops apply -f k8s/deployment.yaml`.
+5. Inspect Pods, events, and application logs to check startup.
+6. Run `kubectl --context kind-inferenceops port-forward deployment/inference-server 9002:9001` and leave that terminal open.
+7. Open [localhost:9002](http://localhost:9002) to check HTTP access.
 
-- Confirm the client selects Nano and save a fixed test image locally.
-- Pin the server image version or digest and record machine specifications and software versions.
-- Measure client-observed request latency without image downloading or visualization in the timed section.
-- Separate initial model loading from warmed-up requests, and record whether model files were already cached.
-- Record repeated-request latency, request failures, and container memory before and after model loading.
+To test predictions through Kubernetes, change the client's API URL from port 9001 to port 9002 before running it. Otherwise, the current client continues to test Compose.
 
-Later project stages will add Kubernetes deployment, observability, load testing, scaling, and reliability experiments. These are planned work, not completed capabilities.
+The Deployment runs one replica and mounts `emptyDir` at `/tmp`. This cache survives a container restart within the same Pod but is lost when the Pod is replaced. It is separate from the Compose cache. The Kubernetes manifest currently has no Service, readiness/startup probes, resource requests or limits, or Compose-equivalent security settings. Without a readiness probe, Pod readiness alone does not verify HTTP or model readiness.
+
+## Initial latency results
+
+The first reported 20-request local run produced:
+
+| Metric | Client-observed latency |
+| --- | ---: |
+| Average | 150.92 ms |
+| Median | 138.71 ms |
+| Minimum | 126.26 ms |
+| Maximum | 212.77 ms |
+
+The client uses `time.perf_counter()` around each SDK inference call and converts seconds to milliseconds. Image loading and decoding happen before the loop; visualization happens afterward. These timings include SDK processing, HTTP communication, and server work, rather than model computation alone.
+
+These are preliminary observations. The client has no explicit warm-up phase, and the model's loaded state at the start of the reported run was not recorded. Machine specifications and the exact server image used for that run were also not recorded. Memory and CPU were inspected with Docker stats, but numerical resource results were not captured. No throughput, concurrency, or Kubernetes latency comparison has been completed.
+
+Both deployment configurations currently use the mutable `latest` image tag. Pin the same image version or digest in each before drawing benchmark comparisons.
+
+## What I learned
+
+- **Containers and images:** Roboflow's image packages the application; Compose records how to run it as a container.
+- **Python environments:** `.venv` isolates the client interpreter and packages, while `.env` stores private configuration. Loading `.env` does not automatically define Python variables.
+- **Request timing:** load and decode the test image before measuring; exclude visualization and distinguish initial loading from warmed-up requests.
+- **Local Kubernetes:** kind creates a Docker container that acts as a Kubernetes node. Creating the cluster and deploying an application into it are separate steps.
+- **Deployment configuration:** labels and selectors connect a Deployment to its Pods, while volume definitions and mounts belong at different YAML levels.
+- **Cluster operations:** kubectl contexts select connection settings. Dry runs validate configuration; Pod descriptions and events explain startup; logs show application behavior; port forwarding provides local access.
+- **Startup diagnosis:** the first Kubernetes image pull took about 96 seconds for a roughly 2.49 GB image. The waiting period was an image download, rather than an application failure.
+
+## Next steps
+
+1. **Verify Kubernetes predictions:** target port 9002 and confirm Nano returns predictions through the forwarded connection.
+2. **Make comparison conditions repeatable:** pin the same server image, record CPU/RAM and software versions, add explicit warm-up requests, and save individual durations. Keep initial loading measurements separate and record cache state. Stop the unused inference instance during each comparison to reduce resource competition.
+3. **Complete the Kubernetes configuration:** add a Service, startup/readiness probes, measured resource requests and limits, and suitable security settings. Decide whether cache persistence beyond a Pod's lifetime is needed.
+4. **Measure and observe:** record memory and CPU, then introduce Prometheus and Grafana before load testing, SLOs, and scaling experiments. Treat port forwarding as development access; document a consistent access path for performance tests.
+5. **Finish project hygiene:** add `.venv/` to `.gitignore` (currently only `.env` is listed) and remove the obsolete Compose `version` field.
+
+Reliability experiments, CI checks, hardening, cost analysis, and the final write-up remain later milestones. This is a local learning study, not a production deployment.
 
 ## References
 
-- [Roboflow Inference Server installation on Linux](https://docs.roboflow.com/deployment/self-hosted/inference-server/install/linux)
-- [Run a model on a local inference server](https://docs.roboflow.com/deployment/self-hosted/self-hosted#run-model-locally)
+- [Roboflow Inference Server on Linux](https://docs.roboflow.com/deployment/self-hosted/inference-server/install/linux)
+- [Local inference and model selection](https://docs.roboflow.com/deployment/self-hosted/self-hosted#run-model-locally)
 - [Pretrained model aliases](https://docs.roboflow.com/models/pretrained-aliases)
-- [Supervision documentation](https://supervision.roboflow.com/)
-- [uv installation](https://docs.astral.sh/uv/getting-started/installation/)
-- [Python virtual environments](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/)
+- [Supervision](https://supervision.roboflow.com/)
+- [Python performance counter](https://docs.python.org/3.12/library/time.html#time.perf_counter)
+- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
+- [Kubernetes emptyDir volumes](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir)
