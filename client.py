@@ -3,6 +3,7 @@ from inference_sdk import InferenceHTTPClient, InferenceConfiguration
 from dotenv import load_dotenv
 import os
 import time
+import statistics
 from PIL import Image
 
 
@@ -27,6 +28,12 @@ for i in range(20):
     request_latency = (end - start) * 1000  # Convert to milliseconds
     list_latencies.append(request_latency)
     print(f"Request latency: {request_latency:.2f} ms")
+
+
+print(f"Average latency: {statistics.mean(list_latencies):.2f} ms")
+print(f"Median latency: {statistics.median(list_latencies):.2f} ms")
+print(f"Minimum latency: {min(list_latencies):.2f} ms")
+print(f"Maximum latency: {max(list_latencies):.2f} ms")
 
 detections = sv.Detections.from_inference(results)
 
